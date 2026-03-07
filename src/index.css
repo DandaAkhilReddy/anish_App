@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+:root {
+  --pitch-green: #2d7a3a;
+  --pitch-strip: #3a9e4c;
+  --crease-white: #f0f0e8;
+  --ball-red: #cc2222;
+  --wicket-brown: #8b6914;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
+  background: #0f172a;
+  color: #f8fafc;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
