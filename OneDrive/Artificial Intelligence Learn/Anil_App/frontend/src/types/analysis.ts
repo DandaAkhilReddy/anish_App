@@ -1,3 +1,8 @@
+export interface SearchResult {
+  symbol: string;
+  name: string;
+}
+
 export type Recommendation = 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'very_high';
 export type TechnicalSignal = 'strong_buy' | 'buy' | 'neutral' | 'sell' | 'strong_sell';
@@ -44,7 +49,7 @@ export interface HistoricalPrice {
   volume: number | null;
 }
 
-export type AnalysisTab = 'chart' | 'news' | 'financials' | 'about';
+export type AnalysisTab = 'chart' | 'news' | 'financials' | 'about' | 'invest';
 
 export interface PriceForecast {
   low: number;
@@ -57,6 +62,17 @@ export interface PricePredictions {
   one_week: PriceForecast;
   one_month: PriceForecast;
   three_months: PriceForecast;
+}
+
+export interface LongTermOutlook {
+  one_year: PriceForecast;
+  five_year: PriceForecast;
+  ten_year: PriceForecast;
+  verdict: Recommendation;
+  verdict_rationale: string;
+  catalysts: string[];
+  long_term_risks: string[];
+  compound_annual_return: number;
 }
 
 export interface RiskAssessment {
@@ -98,6 +114,9 @@ export interface StockAnalysisResponse {
   bear_case: string;
   risk_assessment: RiskAssessment;
   price_predictions: PricePredictions;
+  long_term_outlook: LongTermOutlook | null;
+  research_context: string;
+  research_sources: string[];
   analysis_timestamp: string;
   model_used: string;
   disclaimer: string;

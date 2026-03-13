@@ -1,41 +1,27 @@
-import { motion } from 'framer-motion';
 import type { NewsItem } from '../../types/analysis';
 
 interface NewsCardProps {
   item: NewsItem;
-  index?: number;
 }
 
-const sentimentColor: Record<string, string> = {
-  positive: 'text-emerald-600',
-  negative: 'text-red-600',
-  neutral: 'text-stone-400',
+const dotColor: Record<string, string> = {
+  positive: 'bg-emerald-500',
+  negative: 'bg-red-500',
+  neutral: 'bg-stone-300',
 };
 
-export function NewsCard({ item, index = 0 }: NewsCardProps) {
-  const sentimentClass =
-    item.sentiment !== null ? (sentimentColor[item.sentiment] ?? 'text-stone-400') : 'text-stone-400';
+export function NewsCard({ item }: NewsCardProps) {
+  const dot = item.sentiment !== null ? (dotColor[item.sentiment] ?? 'bg-stone-300') : 'bg-stone-300';
 
   return (
-    <motion.div
-      className="block p-3 rounded-lg hover:bg-stone-100 transition-colors"
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, delay: index * 0.04 }}
-    >
-      <h5 className="text-sm text-stone-700 hover:text-stone-900 leading-snug">
-        {item.title}
-      </h5>
-      <div className="flex items-center gap-3 mt-1.5 text-xs text-stone-400">
+    <div className="flex items-start gap-2.5 py-2.5 px-1">
+      <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${dot}`} />
+      <div className="min-w-0">
+        <p className="text-sm text-stone-700 leading-snug">{item.title}</p>
         {item.source !== null && (
-          <span className="font-medium">{item.source}</span>
-        )}
-        {item.sentiment !== null && (
-          <span className={`capitalize font-medium ${sentimentClass}`}>
-            {item.sentiment}
-          </span>
+          <span className="text-xs text-stone-400">{item.source}</span>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }

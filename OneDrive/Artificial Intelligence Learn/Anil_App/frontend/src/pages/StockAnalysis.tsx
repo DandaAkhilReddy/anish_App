@@ -14,6 +14,8 @@ import { PricePrediction } from '../components/analysis/PricePrediction';
 import { TechnicalSummary } from '../components/technical/TechnicalSummary';
 import { SupportResistance } from '../components/technical/SupportResistance';
 import { CompanyAbout } from '../components/about/CompanyAbout';
+import { ResearchSources } from '../components/analysis/ResearchSources';
+import { InvestmentOutlook } from '../components/invest/InvestmentOutlook';
 
 export function StockAnalysis() {
   const currentTicker = useStockStore((s) => s.currentTicker);
@@ -23,7 +25,13 @@ export function StockAnalysis() {
   const activeTab = useStockStore((s) => s.activeTab);
   const setActiveTab = useStockStore((s) => s.setActiveTab);
 
+  const [hasHydrated, setHasHydrated] = useState(useStockStore.persist.hasHydrated());
   const [loadingSeconds, setLoadingSeconds] = useState(0);
+
+  useEffect(() => {
+    const unsub = useStockStore.persist.onFinishHydration(() => setHasHydrated(true));
+    return unsub;
+  }, []);
 
   useEffect(() => {
     if (!isLoading) {
@@ -34,16 +42,30 @@ export function StockAnalysis() {
     return () => clearInterval(interval);
   }, [isLoading]);
 
+  // Wait for persist middleware to rehydrate before deciding what to show
+  if (!hasHydrated) return null;
+
   if (!currentTicker) {
     return <LandingHero />;
   }
 
-  const loadingMessage =
-    loadingSeconds < 10
-      ? 'AI is crunching the data'
-      : loadingSeconds < 30
-        ? 'Still working... generating detailed analysis'
-        : 'Almost there... large responses take a bit longer';
+  const agentMessages = [
+    'Your AI agent is analyzing market data...',
+    'Scanning SEC filings and earnings reports...',
+    'AI agents are debating bull vs bear cases...',
+    'Crunching technical indicators and chart patterns...',
+    'Your AI agent is reading analyst reports...',
+    'Cross-referencing news sentiment across sources...',
+    'Building price prediction models...',
+    'AI agents are stress-testing risk scenarios...',
+    'Evaluating competitive landscape and moat strength...',
+    'Running Monte Carlo simulations on price targets...',
+    'Your AI agent is consulting Wall Street consensus...',
+    'Analyzing insider trading patterns and institutional flows...',
+    'Almost done — assembling the final report...',
+  ];
+  const messageIndex = Math.floor(loadingSeconds / 10) % agentMessages.length;
+  const loadingMessage = agentMessages[messageIndex];
 
   if (isLoading) {
     return (
@@ -135,7 +157,29 @@ export function StockAnalysis() {
             </div>
           )}
 
-          {activeTab === 'about' && <CompanyAbout analysis={analysis} />}
+          {activeTab === 'about' && (
+            <div className="space-y-4">
+              <CompanyAbout analysis={analysis} />
+              <ResearchSources
+                researchContext={analysis.research_context ?? ''}
+                researchSources={analysis.research_sources ?? []}
+              />
+            </div>
+          )}
+
+          {activeTab === 'invest' && analysis.long_term_outlook && (
+            <InvestmentOutlook
+              outlook={analysis.long_term_outlook}
+              currentPrice={analysis.current_price}
+              ticker={analysis.ticker}
+            />
+          )}
+
+          {activeTab === 'invest' && !analysis.long_term_outlook && (
+            <div className="text-center py-12 text-stone-400">
+              <p className="text-sm">Long-term outlook data not available for this stock.</p>
+            </div>
+          )}
         </motion.div>
       </AnimatePresence>
     </motion.div>

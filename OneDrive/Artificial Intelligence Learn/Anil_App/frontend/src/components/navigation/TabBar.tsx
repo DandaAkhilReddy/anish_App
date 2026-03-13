@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { LineChart, Newspaper, BarChart3, Info } from 'lucide-react';
+import { LineChart, Newspaper, BarChart3, Info, TrendingUp } from 'lucide-react';
 import type { AnalysisTab } from '../../types/analysis';
 
 interface TabConfig {
@@ -13,6 +13,7 @@ const tabs: TabConfig[] = [
   { id: 'news', label: 'News', icon: Newspaper },
   { id: 'financials', label: 'Financials', icon: BarChart3 },
   { id: 'about', label: 'About', icon: Info },
+  { id: 'invest', label: 'Invest', icon: TrendingUp },
 ];
 
 interface TabBarProps {

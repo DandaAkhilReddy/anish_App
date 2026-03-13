@@ -15,11 +15,11 @@ export function NewsFeed({ items }: NewsFeedProps) {
         <h4 className="text-sm font-medium text-stone-500">Latest News</h4>
         <span className="text-xs text-stone-400 ml-auto">{items.length} articles</span>
       </div>
-      <div className="space-y-2">
+      <div className="divide-y divide-stone-100">
         {items.length === 0 ? (
           <p className="text-sm text-stone-400 text-center py-4">No recent news found</p>
         ) : (
-          items.map((item, i) => <NewsCard key={i} item={item} index={i} />)
+          items.map((item, i) => <NewsCard key={i} item={item} />)
         )}
       </div>
     </Card>
