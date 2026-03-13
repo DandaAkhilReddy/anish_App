@@ -35,6 +35,12 @@ vi.mock('../../stores/stockStore', () => ({
   useStockStore: vi.fn(),
 }));
 
+// Mock the stock API so useStockSearch's debounced fetch never hits the network
+vi.mock('../../services/stockApi', () => ({
+  searchStocks: vi.fn().mockResolvedValue([]),
+  analyzeStock: vi.fn().mockResolvedValue({}),
+}));
+
 // Lazily import the mocked module so we can configure it per-test.
 import { useStockStore } from '../../stores/stockStore';
 
@@ -302,7 +308,7 @@ describe('StockSearchBar', () => {
     it('renders an input with the expected placeholder text', () => {
       render(<StockSearchBar />);
       const input = screen.getByPlaceholderText(
-        'Enter ticker or company name (e.g., AAPL, Microsoft, Tesla)',
+        'Search stocks — type to see suggestions (e.g., A for Apple)',
       );
       expect(input).toBeInTheDocument();
     });

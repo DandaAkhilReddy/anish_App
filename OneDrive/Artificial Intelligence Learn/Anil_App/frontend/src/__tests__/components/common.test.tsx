@@ -5,7 +5,7 @@
  * jest-dom matchers are available via the setup file (src/test/setup.ts).
  */
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 
 vi.mock('framer-motion', () => {
@@ -79,6 +79,27 @@ describe('Card', () => {
     );
     expect(screen.getByText('first')).toBeInTheDocument();
     expect(screen.getByText('second')).toBeInTheDocument();
+  });
+
+  it('fires onMouseMove without throwing', () => {
+    const { container } = render(<Card>content</Card>);
+    const div = container.firstElementChild as HTMLElement;
+    expect(() => fireEvent.mouseMove(div, { clientX: 100, clientY: 50 })).not.toThrow();
+  });
+
+  it('fires onMouseLeave without throwing', () => {
+    const { container } = render(<Card>content</Card>);
+    const div = container.firstElementChild as HTMLElement;
+    expect(() => fireEvent.mouseLeave(div)).not.toThrow();
+  });
+
+  it('fires onMouseMove then onMouseLeave in sequence without throwing', () => {
+    const { container } = render(<Card>content</Card>);
+    const div = container.firstElementChild as HTMLElement;
+    expect(() => {
+      fireEvent.mouseMove(div, { clientX: 200, clientY: 100 });
+      fireEvent.mouseLeave(div);
+    }).not.toThrow();
   });
 });
 

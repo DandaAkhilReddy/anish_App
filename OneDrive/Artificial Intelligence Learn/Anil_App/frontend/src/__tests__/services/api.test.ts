@@ -287,6 +287,114 @@ describe('post', () => {
 });
 
 // ---------------------------------------------------------------------------
+// request() error branches — timeout, network retry, network exhausted
+// ---------------------------------------------------------------------------
+
+describe('request error branches', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('throws ApiError with status 408 and code TIMEOUT on AbortError', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    const abortError = new DOMException('signal is aborted', 'AbortError');
+    mockFetch.mockRejectedValue(abortError);
+
+    await expect(get('/test')).rejects.toSatisfy((err: unknown) => {
+      const e = err as ApiError;
+      return e instanceof ApiError && e.status === 408 && e.code === 'TIMEOUT';
+    });
+  });
+
+  it('AbortError message mentions timed out', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    mockFetch.mockRejectedValue(new DOMException('aborted', 'AbortError'));
+
+    await expect(get('/test')).rejects.toSatisfy((err: unknown) => {
+      const e = err as ApiError;
+      return e instanceof ApiError && e.message.toLowerCase().includes('timed out');
+    });
+  });
+
+  it('retries on network error and succeeds on final attempt', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    mockFetch
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(makeResponse(200, { ok: true }));
+
+    const promise = get<{ ok: boolean }>('/test');
+
+    // Advance past first retry backoff (attempt 0 → delay 2000ms)
+    await vi.advanceTimersByTimeAsync(2000);
+    // Advance past second retry backoff (attempt 1 → delay 4000ms)
+    await vi.advanceTimersByTimeAsync(4000);
+
+    const result = await promise;
+    expect(result).toEqual({ ok: true });
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('throws ApiError with status 0 and code NETWORK_ERROR after all retries exhausted', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    // Capture the rejection before advancing timers so Vitest tracks it from the start
+    let caughtError: unknown;
+    const promise = get('/test').catch((e) => { caughtError = e; });
+
+    // Advance past all retry backoffs: attempt 0 → 2000ms, attempt 1 → 4000ms
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    const e = caughtError as ApiError;
+    expect(e).toBeInstanceOf(ApiError);
+    expect(e.status).toBe(0);
+    expect(e.code).toBe('NETWORK_ERROR');
+    // 1 original attempt + 2 retries
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('NETWORK_ERROR message mentions connection', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    let caughtError: unknown;
+    const promise = get('/test').catch((e) => { caughtError = e; });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    const e = caughtError as ApiError;
+    expect(e).toBeInstanceOf(ApiError);
+    expect(e.message.toLowerCase()).toContain('connection');
+  });
+
+  it('does not retry on AbortError — fetch is called exactly once', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    mockFetch.mockRejectedValue(new DOMException('aborted', 'AbortError'));
+
+    await expect(get('/test')).rejects.toBeInstanceOf(ApiError);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry on ApiError (4xx) — fetch is called exactly once', async () => {
+    const mockFetch = vi.mocked(globalThis.fetch);
+    mockFetch.mockResolvedValue(
+      makeResponse(404, { error: { code: 'NOT_FOUND', message: 'Not found' } }, false),
+    );
+
+    await expect(get('/test')).rejects.toBeInstanceOf(ApiError);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // analyzeStock()
 // ---------------------------------------------------------------------------
 

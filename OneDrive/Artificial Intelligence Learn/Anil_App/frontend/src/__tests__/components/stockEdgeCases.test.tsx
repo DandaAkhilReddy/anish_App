@@ -76,9 +76,9 @@ const baseAnalysis: StockAnalysisResponse = {
 // ===========================================================================
 
 describe('NewsCard — unrecognised sentiment fallback', () => {
-  it('applies text-stone-400 for an unrecognised sentiment string (runtime fallback)', () => {
-    // Cast bypasses TS so we can hit the ?? 'text-stone-400' fallback at line 15
-    render(
+  it('falls back to bg-stone-300 dot for an unrecognised sentiment string', () => {
+    // Cast bypasses TS so we can hit the ?? 'bg-stone-300' fallback in dotColor
+    const { container } = render(
       <NewsCard
         item={{
           title: 'Test headline',
@@ -87,8 +87,8 @@ describe('NewsCard — unrecognised sentiment fallback', () => {
         }}
       />,
     );
-    const label = screen.getByText('unknown_value');
-    expect(label).toHaveClass('text-stone-400');
+    const dot = container.querySelector('.bg-stone-300');
+    expect(dot).toBeInTheDocument();
   });
 });
 

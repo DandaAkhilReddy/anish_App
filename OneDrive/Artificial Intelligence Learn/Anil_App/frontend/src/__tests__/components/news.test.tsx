@@ -58,40 +58,33 @@ describe('NewsCard', () => {
     expect(screen.queryByText('Reuters')).not.toBeInTheDocument();
   });
 
-  it('renders the sentiment label when sentiment is provided', () => {
-    render(<NewsCard item={makeItem({ sentiment: 'positive' })} />);
-    expect(screen.getByText('positive')).toBeInTheDocument();
+  it('renders a sentiment dot with bg-emerald-500 for positive sentiment', () => {
+    const { container } = render(<NewsCard item={makeItem({ sentiment: 'positive' })} />);
+    const dot = container.querySelector('.bg-emerald-500');
+    expect(dot).toBeInTheDocument();
   });
 
-  it('hides the sentiment element when sentiment is null', () => {
-    render(<NewsCard item={makeItem({ sentiment: null })} />);
-    expect(screen.queryByText('positive')).not.toBeInTheDocument();
-    expect(screen.queryByText('negative')).not.toBeInTheDocument();
-    expect(screen.queryByText('neutral')).not.toBeInTheDocument();
+  it('renders a sentiment dot with bg-red-500 for negative sentiment', () => {
+    const { container } = render(<NewsCard item={makeItem({ sentiment: 'negative' })} />);
+    const dot = container.querySelector('.bg-red-500');
+    expect(dot).toBeInTheDocument();
   });
 
-  it('applies the emerald colour class for positive sentiment', () => {
-    render(<NewsCard item={makeItem({ sentiment: 'positive' })} />);
-    const label = screen.getByText('positive');
-    expect(label).toHaveClass('text-emerald-600');
+  it('renders a sentiment dot with bg-stone-300 for neutral sentiment', () => {
+    const { container } = render(<NewsCard item={makeItem({ sentiment: 'neutral' })} />);
+    const dot = container.querySelector('.bg-stone-300');
+    expect(dot).toBeInTheDocument();
   });
 
-  it('applies the red colour class for negative sentiment', () => {
-    render(<NewsCard item={makeItem({ sentiment: 'negative' })} />);
-    const label = screen.getByText('negative');
-    expect(label).toHaveClass('text-red-600');
+  it('renders a sentiment dot with bg-stone-300 when sentiment is null', () => {
+    const { container } = render(<NewsCard item={makeItem({ sentiment: null })} />);
+    const dot = container.querySelector('.bg-stone-300');
+    expect(dot).toBeInTheDocument();
   });
 
-  it('applies the gray colour class for neutral sentiment', () => {
-    render(<NewsCard item={makeItem({ sentiment: 'neutral' })} />);
-    const label = screen.getByText('neutral');
-    expect(label).toHaveClass('text-stone-400');
-  });
-
-  it('renders both source and sentiment together when both are provided', () => {
+  it('renders source text alongside the sentiment dot', () => {
     render(<NewsCard item={makeItem({ source: 'AP News', sentiment: 'negative' })} />);
     expect(screen.getByText('AP News')).toBeInTheDocument();
-    expect(screen.getByText('negative')).toBeInTheDocument();
   });
 
   it('renders title only when both source and sentiment are null', () => {

@@ -46,9 +46,9 @@ function renderTabBar(activeTab: AnalysisTab = 'chart', onTabChange = vi.fn()) {
 describe('TabBar', () => {
   // --- Rendering ------------------------------------------------------------
 
-  it('renders exactly 4 tab buttons', () => {
+  it('renders exactly 5 tab buttons', () => {
     renderTabBar();
-    expect(screen.getAllByRole('button')).toHaveLength(4);
+    expect(screen.getAllByRole('button')).toHaveLength(5);
   });
 
   it('renders a "Chart" tab button', () => {
@@ -71,6 +71,11 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: /about/i })).toBeInTheDocument();
   });
 
+  it('renders an "Invest" tab button', () => {
+    renderTabBar();
+    expect(screen.getByRole('button', { name: /invest/i })).toBeInTheDocument();
+  });
+
   // --- Active tab styling ---------------------------------------------------
 
   it('applies text-stone-900 class to the active tab button', () => {
@@ -84,6 +89,7 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: /news/i })).not.toHaveClass('text-stone-900');
     expect(screen.getByRole('button', { name: /financials/i })).not.toHaveClass('text-stone-900');
     expect(screen.getByRole('button', { name: /about/i })).not.toHaveClass('text-stone-900');
+    expect(screen.getByRole('button', { name: /invest/i })).not.toHaveClass('text-stone-900');
   });
 
   it('applies text-stone-400 to inactive tab buttons', () => {
@@ -91,6 +97,7 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: /news/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /financials/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /about/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /invest/i })).toHaveClass('text-stone-400');
   });
 
   it('marks "news" button as active when activeTab is "news"', () => {
@@ -99,6 +106,7 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: /chart/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /financials/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /about/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /invest/i })).toHaveClass('text-stone-400');
   });
 
   it('marks "financials" button as active when activeTab is "financials"', () => {
@@ -107,6 +115,7 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: /chart/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /news/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /about/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /invest/i })).toHaveClass('text-stone-400');
   });
 
   it('marks "about" button as active when activeTab is "about"', () => {
@@ -115,6 +124,16 @@ describe('TabBar', () => {
     expect(screen.getByRole('button', { name: /chart/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /news/i })).toHaveClass('text-stone-400');
     expect(screen.getByRole('button', { name: /financials/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /invest/i })).toHaveClass('text-stone-400');
+  });
+
+  it('marks "invest" button as active when activeTab is "invest"', () => {
+    renderTabBar('invest');
+    expect(screen.getByRole('button', { name: /invest/i })).toHaveClass('text-stone-900');
+    expect(screen.getByRole('button', { name: /chart/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /news/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /financials/i })).toHaveClass('text-stone-400');
+    expect(screen.getByRole('button', { name: /about/i })).toHaveClass('text-stone-400');
   });
 
   // --- Underline indicator --------------------------------------------------
@@ -167,6 +186,13 @@ describe('TabBar', () => {
     expect(onTabChange).toHaveBeenCalledWith('about');
   });
 
+  it('calls onTabChange with "invest" when the Invest button is clicked', () => {
+    const { onTabChange } = renderTabBar('chart');
+    fireEvent.click(screen.getByRole('button', { name: /invest/i }));
+    expect(onTabChange).toHaveBeenCalledTimes(1);
+    expect(onTabChange).toHaveBeenCalledWith('invest');
+  });
+
   it('calls onTabChange even when the already-active tab is clicked', () => {
     const { onTabChange } = renderTabBar('chart');
     fireEvent.click(screen.getByRole('button', { name: /chart/i }));
@@ -180,13 +206,14 @@ describe('TabBar', () => {
 
   // --- Tab order ------------------------------------------------------------
 
-  it('renders tabs in the order: Chart, News, Financials, About', () => {
+  it('renders tabs in the order: Chart, News, Financials, About, Invest', () => {
     renderTabBar();
     const buttons = screen.getAllByRole('button');
     expect(buttons[0]).toHaveAccessibleName(/chart/i);
     expect(buttons[1]).toHaveAccessibleName(/news/i);
     expect(buttons[2]).toHaveAccessibleName(/financials/i);
     expect(buttons[3]).toHaveAccessibleName(/about/i);
+    expect(buttons[4]).toHaveAccessibleName(/invest/i);
   });
 
   // --- Container structure --------------------------------------------------

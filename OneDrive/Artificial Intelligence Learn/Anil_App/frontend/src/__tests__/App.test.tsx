@@ -38,6 +38,12 @@ vi.mock('../stores/stockStore', () => ({
   useStockStore: vi.fn(),
 }));
 
+// Mock the stock API so useStockSearch's debounced fetch never hits the network
+vi.mock('../services/stockApi', () => ({
+  searchStocks: vi.fn().mockResolvedValue([]),
+  analyzeStock: vi.fn().mockResolvedValue({}),
+}));
+
 import { useStockStore } from '../stores/stockStore';
 
 function setupDefaultStore(): void {
@@ -55,6 +61,12 @@ function setupDefaultStore(): void {
     (selector: (s: typeof store) => unknown) => selector(store),
   );
   (useStockStore as unknown as { getState: () => typeof store }).getState = () => store;
+
+  // Persist middleware API used by hydration guard
+  (useStockStore as unknown as Record<string, unknown>).persist = {
+    hasHydrated: () => true,
+    onFinishHydration: () => () => {},
+  };
 }
 
 import App from '../App';

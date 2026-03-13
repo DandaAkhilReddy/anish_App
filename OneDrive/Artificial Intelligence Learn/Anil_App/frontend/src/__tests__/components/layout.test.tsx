@@ -23,6 +23,12 @@ vi.mock('../../stores/stockStore', () => ({
   ),
 }));
 
+// Mock the stock API so useStockSearch's debounced fetch never hits the network
+vi.mock('../../services/stockApi', () => ({
+  searchStocks: vi.fn().mockResolvedValue([]),
+  analyzeStock: vi.fn().mockResolvedValue({}),
+}));
+
 // Attach getState so the imperative call in StockSearchBar works too
 import { useStockStore } from '../../stores/stockStore';
 (useStockStore as unknown as { getState: () => { fetchAnalysis: () => void } }).getState = () => ({
@@ -129,7 +135,7 @@ describe('Header', () => {
     mockStore.currentTicker = 'AAPL';
     render(<Header />);
     const input = screen.getByPlaceholderText(
-      'Enter ticker or company name (e.g., AAPL, Microsoft, Tesla)',
+      'Search stocks — type to see suggestions (e.g., A for Apple)',
     );
     expect(input).toBeInTheDocument();
   });
@@ -138,7 +144,7 @@ describe('Header', () => {
     render(<Header />);
     expect(
       screen.queryByPlaceholderText(
-        'Enter ticker or company name (e.g., AAPL, Microsoft, Tesla)',
+        'Search stocks — type to see suggestions (e.g., A for Apple)',
       ),
     ).not.toBeInTheDocument();
   });
