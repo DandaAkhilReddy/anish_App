@@ -123,3 +123,178 @@ class TestExtractJsonReturnType:
     )
     def test_always_returns_str(self, text: str) -> None:
         assert isinstance(_extract_json(text), str)
+
+
+# ---------------------------------------------------------------------------
+# New: JS-style // comments (pass-through — repair is handled by _repair_json)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonComments:
+    """_extract_json does not strip comments — it only extracts boundaries.
+
+    Comment removal is delegated to _repair_json. These tests document the
+    exact boundary behaviour so that future refactors cannot silently alter it.
+    """
+
+    def test_js_line_comment_passed_through_raw_braces(self) -> None:
+        # _extract_json isolates the JSON text; comments survive extraction
+        text = '{"a": 1, // comment\n"b": 2}'
+        result = _extract_json(text)
+        # brace heuristic: from first { to last }
+        assert result == '{"a": 1, // comment\n"b": 2}'
+
+    def test_js_line_comment_inside_fence_preserved(self) -> None:
+        text = '```json\n{"x": 1 // inline\n}\n```'
+        result = _extract_json(text)
+        assert result == '{"x": 1 // inline\n}'
+
+    def test_block_comment_passed_through_unchanged(self) -> None:
+        # /* */ block comments are NOT removed by _repair_json either —
+        # this documents the current implementation boundary.
+        text = '{"key": /* comment */ "value"}'
+        result = _extract_json(text)
+        assert result == '{"key": /* comment */ "value"}'
+
+
+# ---------------------------------------------------------------------------
+# New: trailing commas — extraction is unaffected (repair is separate)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonTrailingCommas:
+    """_extract_json returns the raw text; trailing-comma removal is in _repair_json."""
+
+    def test_trailing_comma_in_object_extracted_verbatim(self) -> None:
+        text = '{"a": 1, "b": 2,}'
+        result = _extract_json(text)
+        assert result == '{"a": 1, "b": 2,}'
+
+    def test_trailing_comma_in_array_extracted_verbatim(self) -> None:
+        text = '{"items": [1, 2, 3,]}'
+        result = _extract_json(text)
+        assert result == '{"items": [1, 2, 3,]}'
+
+    def test_trailing_comma_inside_fence_extracted_verbatim(self) -> None:
+        text = '```json\n{"x": [1,]}\n```'
+        result = _extract_json(text)
+        assert result == '{"x": [1,]}'
+
+
+# ---------------------------------------------------------------------------
+# New: single-quoted JSON
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonSingleQuotes:
+    """Single-quoted JSON is not valid JSON; _extract_json extracts boundaries only."""
+
+    def test_single_quoted_object_extracted_by_brace_heuristic(self) -> None:
+        text = "{'key': 'value'}"
+        result = _extract_json(text)
+        # braces are found — extraction succeeds; parsing would still fail
+        assert result == "{'key': 'value'}"
+
+    def test_single_quoted_inside_fence_extracted(self) -> None:
+        text = "```json\n{'a': 1}\n```"
+        result = _extract_json(text)
+        assert result == "{'a': 1}"
+
+
+# ---------------------------------------------------------------------------
+# New: unicode escape sequences
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonUnicodeEscapes:
+    """Unicode escapes inside strings are transparent to _extract_json."""
+
+    def test_unicode_escape_in_value_extracted_cleanly(self) -> None:
+        text = '{"name": "caf\\u00e9"}'
+        result = _extract_json(text)
+        assert result == '{"name": "caf\\u00e9"}'
+
+    def test_unicode_escape_in_key_extracted_cleanly(self) -> None:
+        text = '{"\\u0061": 1}'  # \u0061 == "a"
+        result = _extract_json(text)
+        assert result == '{"\\u0061": 1}'
+
+    def test_unicode_escape_inside_fence_extracted_cleanly(self) -> None:
+        text = '```json\n{"emoji": "\\u2764"}\n```'
+        result = _extract_json(text)
+        assert result == '{"emoji": "\\u2764"}'
+
+
+# ---------------------------------------------------------------------------
+# New: deeply nested JSON
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonDeeplyNested:
+    """Deeply nested objects and arrays rely on the brace heuristic."""
+
+    def test_five_levels_deep_raw(self) -> None:
+        text = '{"l1": {"l2": {"l3": {"l4": {"l5": "deep"}}}}}'
+        result = _extract_json(text)
+        assert result == '{"l1": {"l2": {"l3": {"l4": {"l5": "deep"}}}}}'
+
+    def test_five_levels_deep_in_fence(self) -> None:
+        payload = '{"a": {"b": {"c": {"d": {"e": 42}}}}}'
+        text = f"```json\n{payload}\n```"
+        result = _extract_json(text)
+        assert result == payload
+
+    def test_nested_arrays_inside_objects(self) -> None:
+        text = '{"matrix": [[1, [2, [3, [4]]]], 5]}'
+        result = _extract_json(text)
+        assert result == '{"matrix": [[1, [2, [3, [4]]]], 5]}'
+
+
+# ---------------------------------------------------------------------------
+# New: newlines in string values
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonNewlinesInStrings:
+    """Newlines embedded in string values should be preserved through extraction."""
+
+    def test_escaped_newline_in_value_preserved_raw(self) -> None:
+        text = '{"summary": "line1\\nline2"}'
+        result = _extract_json(text)
+        assert result == '{"summary": "line1\\nline2"}'
+
+    def test_literal_newline_in_value_preserved_raw(self) -> None:
+        # Literal newline inside the string — unusual but some LLMs emit it
+        text = '{"text": "hello\nworld"}'
+        result = _extract_json(text)
+        assert result == '{"text": "hello\nworld"}'
+
+    def test_multiline_value_inside_fence(self) -> None:
+        payload = '{"note": "first line\\nsecond line"}'
+        text = f"```json\n{payload}\n```"
+        result = _extract_json(text)
+        assert result == payload
+
+
+# ---------------------------------------------------------------------------
+# New: multiple JSON objects with no fences (brace heuristic behaviour)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonMultipleObjects:
+    """When no fence is present, brace heuristic spans first { to last }.
+
+    This means multiple adjacent JSON objects are returned as one blob —
+    documenting exact behaviour so callers understand the contract.
+    """
+
+    def test_two_json_objects_spans_first_to_last_brace(self) -> None:
+        # rfind("}") reaches the closing brace of the second object
+        text = '{"a": 1} {"b": 2}'
+        result = _extract_json(text)
+        assert result == '{"a": 1} {"b": 2}'
+
+    def test_json_object_followed_by_prose_and_another_object(self) -> None:
+        text = 'result: {"x": 1} and also {"y": 2} end'
+        result = _extract_json(text)
+        assert result == '{"x": 1} and also {"y": 2}'

@@ -8,6 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.analysis import (
+    HistoricalPrice,
+    LongTermOutlook,
     NewsItem,
     PriceForecast,
     PricePredictions,
@@ -418,7 +420,7 @@ class TestStockAnalysisResponse:
 
     def test_default_model_used(self) -> None:
         resp = StockAnalysisResponse(**_make_response())
-        assert resp.model_used == "kimi-k2.5"
+        assert resp.model_used == "gpt-5.3"
 
     def test_model_used_override(self) -> None:
         resp = StockAnalysisResponse(**_make_response(model_used="gpt-4o"))
@@ -426,7 +428,7 @@ class TestStockAnalysisResponse:
 
     def test_default_disclaimer_text(self) -> None:
         resp = StockAnalysisResponse(**_make_response())
-        assert "Yahoo Finance" in resp.disclaimer
+        assert "Financial Modeling Prep" in resp.disclaimer
         assert "not financial advice" in resp.disclaimer
 
     def test_disclaimer_overridable(self) -> None:
@@ -489,3 +491,404 @@ class TestStockAnalysisResponse:
         resp = StockAnalysisResponse(**_make_response(quarterly_earnings=earnings))
         assert len(resp.quarterly_earnings) == 2
         assert resp.quarterly_earnings[1].eps == 2.05
+
+    def test_long_term_outlook_defaults_to_none(self) -> None:
+        resp = StockAnalysisResponse(**_make_response())
+        assert resp.long_term_outlook is None
+
+    def test_long_term_outlook_populated(self) -> None:
+        outlook = {
+            "one_year": _make_forecast(),
+            "five_year": _make_forecast(mid=200.0),
+            "ten_year": _make_forecast(mid=350.0),
+            "verdict": "strong_buy",
+            "verdict_rationale": "Excellent long-term growth.",
+            "catalysts": ["AI", "Cloud"],
+            "long_term_risks": ["Regulation"],
+            "compound_annual_return": 15.0,
+        }
+        resp = StockAnalysisResponse(**_make_response(long_term_outlook=outlook))
+        assert resp.long_term_outlook is not None
+        assert isinstance(resp.long_term_outlook, LongTermOutlook)
+        assert resp.long_term_outlook.verdict == "strong_buy"
+        assert resp.long_term_outlook.compound_annual_return == 15.0
+
+
+# ===========================================================================
+# LongTermOutlook
+# ===========================================================================
+
+
+def _make_outlook(**overrides: Any) -> dict[str, Any]:
+    """Minimal valid LongTermOutlook payload."""
+    base: dict[str, Any] = {
+        "one_year": _make_forecast(),
+        "five_year": _make_forecast(),
+        "ten_year": _make_forecast(),
+        "verdict": "buy",
+        "verdict_rationale": "Solid growth trajectory.",
+        "catalysts": ["innovation"],
+        "long_term_risks": ["competition"],
+        "compound_annual_return": 10.0,
+    }
+    return {**base, **overrides}
+
+
+class TestLongTermOutlook:
+    def test_all_fields_populated(self) -> None:
+        outlook = LongTermOutlook(**_make_outlook())
+        assert outlook.verdict == "buy"
+        assert outlook.compound_annual_return == 10.0
+        assert isinstance(outlook.one_year, PriceForecast)
+
+    @pytest.mark.parametrize(
+        "verdict",
+        ["strong_buy", "buy", "hold", "sell", "strong_sell"],
+    )
+    def test_each_verdict_value_accepted(self, verdict: str) -> None:
+        outlook = LongTermOutlook(**_make_outlook(verdict=verdict))
+        assert outlook.verdict == verdict
+
+    def test_invalid_verdict_raises_validation_error(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            LongTermOutlook(**_make_outlook(verdict="maybe"))
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("verdict",) for e in errors)
+
+    def test_catalysts_defaults_to_empty_list(self) -> None:
+        payload = _make_outlook()
+        del payload["catalysts"]
+        outlook = LongTermOutlook(**payload)
+        assert outlook.catalysts == []
+
+    def test_long_term_risks_defaults_to_empty_list(self) -> None:
+        payload = _make_outlook()
+        del payload["long_term_risks"]
+        outlook = LongTermOutlook(**payload)
+        assert outlook.long_term_risks == []
+
+    def test_missing_required_forecast_raises(self) -> None:
+        payload = _make_outlook()
+        del payload["five_year"]
+        with pytest.raises(ValidationError) as exc_info:
+            LongTermOutlook(**payload)
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("five_year",) for e in errors)
+
+    def test_nested_forecasts_preserved(self) -> None:
+        outlook = LongTermOutlook(
+            **_make_outlook(
+                one_year=_make_forecast(mid=150.0),
+                five_year=_make_forecast(mid=250.0),
+                ten_year=_make_forecast(mid=400.0),
+            )
+        )
+        assert outlook.one_year.mid == 150.0
+        assert outlook.five_year.mid == 250.0
+        assert outlook.ten_year.mid == 400.0
+
+
+# ===========================================================================
+# HistoricalPrice
+# ===========================================================================
+
+
+class TestHistoricalPrice:
+    def test_all_required_fields(self) -> None:
+        price = HistoricalPrice(date="2025-01-15", open=150.0, high=155.0, low=148.0, close=153.5)
+        assert price.date == "2025-01-15"
+        assert price.open == 150.0
+        assert price.high == 155.0
+        assert price.low == 148.0
+        assert price.close == 153.5
+        assert price.volume is None
+
+    def test_volume_none_explicit(self) -> None:
+        """volume is optional and explicitly accepts None."""
+        price = HistoricalPrice(
+            date="2025-06-01", open=200.0, high=205.0, low=198.0, close=202.0, volume=None
+        )
+        assert price.volume is None
+
+    def test_volume_populated(self) -> None:
+        """volume stores an integer when provided."""
+        price = HistoricalPrice(
+            date="2025-06-01", open=200.0, high=205.0, low=198.0, close=202.0, volume=83_500_000
+        )
+        assert price.volume == 83_500_000
+
+    def test_missing_required_date_raises(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            HistoricalPrice(open=100.0, high=110.0, low=90.0, close=105.0)  # type: ignore[call-arg]
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("date",) for e in errors)
+
+    def test_zero_volume_accepted(self) -> None:
+        """Volume of zero is a valid (e.g. pre-market placeholder) value."""
+        price = HistoricalPrice(
+            date="2025-01-01", open=100.0, high=100.0, low=100.0, close=100.0, volume=0
+        )
+        assert price.volume == 0
+
+
+# ===========================================================================
+# TechnicalSnapshot — edge cases
+# ===========================================================================
+
+
+class TestTechnicalSnapshotEdgeCases:
+    def test_all_float_fields_explicitly_none(self) -> None:
+        """Passing None explicitly for every optional float is equivalent to defaults."""
+        snap = TechnicalSnapshot(
+            sma_20=None,
+            sma_50=None,
+            sma_200=None,
+            ema_12=None,
+            ema_26=None,
+            rsi_14=None,
+            macd_line=None,
+            macd_signal=None,
+            macd_histogram=None,
+            bollinger_upper=None,
+            bollinger_middle=None,
+            bollinger_lower=None,
+        )
+        for field in (
+            "sma_20", "sma_50", "sma_200",
+            "ema_12", "ema_26",
+            "rsi_14",
+            "macd_line", "macd_signal", "macd_histogram",
+            "bollinger_upper", "bollinger_middle", "bollinger_lower",
+        ):
+            assert getattr(snap, field) is None, f"{field} should be None"
+
+    def test_negative_float_values_accepted(self) -> None:
+        """No range constraints — negative indicator values (e.g. MACD) are valid."""
+        snap = TechnicalSnapshot(
+            macd_line=-2.5,
+            macd_signal=-1.8,
+            macd_histogram=-0.7,
+            bollinger_lower=-5.0,
+        )
+        assert snap.macd_line == pytest.approx(-2.5)
+        assert snap.macd_histogram == pytest.approx(-0.7)
+
+    def test_all_fields_populated_round_trip(self) -> None:
+        """Every field round-trips correctly through model construction."""
+        snap = TechnicalSnapshot(
+            sma_20=100.0, sma_50=95.0, sma_200=90.0,
+            ema_12=102.0, ema_26=98.0,
+            rsi_14=60.0,
+            macd_line=1.5, macd_signal=1.2, macd_histogram=0.3,
+            bollinger_upper=115.0, bollinger_middle=105.0, bollinger_lower=95.0,
+            support_levels=[88.0, 85.0],
+            resistance_levels=[120.0, 125.0],
+            signal="strong_buy",
+        )
+        assert snap.sma_20 == 100.0
+        assert snap.rsi_14 == 60.0
+        assert snap.macd_histogram == pytest.approx(0.3)
+        assert snap.signal == "strong_buy"
+        assert snap.support_levels == [88.0, 85.0]
+        assert snap.resistance_levels == [120.0, 125.0]
+
+
+# ===========================================================================
+# NewsItem — edge cases
+# ===========================================================================
+
+
+class TestNewsItemEdgeCases:
+    def test_source_none_explicit(self) -> None:
+        """source field accepts None explicitly (e.g. AI-generated headline with no attribution)."""
+        item = NewsItem(title="Market opens lower", source=None)
+        assert item.source is None
+
+    def test_source_and_sentiment_both_none(self) -> None:
+        """Both optional fields absent simultaneously is valid."""
+        item = NewsItem(title="Earnings beat")
+        assert item.source is None
+        assert item.sentiment is None
+
+
+# ===========================================================================
+# QuarterlyEarning — edge cases
+# ===========================================================================
+
+
+class TestQuarterlyEarningEdgeCases:
+    def test_yoy_revenue_growth_none_explicit(self) -> None:
+        """yoy_revenue_growth accepts explicit None (e.g. first-quarter-ever data)."""
+        earning = QuarterlyEarning(quarter="Q1 2020", yoy_revenue_growth=None)
+        assert earning.yoy_revenue_growth is None
+
+    def test_all_numeric_fields_none(self) -> None:
+        """All optional numeric fields absent at once is valid."""
+        earning = QuarterlyEarning(quarter="Q4 2024")
+        assert earning.revenue is None
+        assert earning.net_income is None
+        assert earning.eps is None
+        assert earning.yoy_revenue_growth is None
+
+    def test_yoy_revenue_growth_positive_and_negative(self) -> None:
+        """yoy_revenue_growth can represent growth (+) or contraction (-)."""
+        growth = QuarterlyEarning(quarter="Q2 2024", yoy_revenue_growth=0.15)
+        decline = QuarterlyEarning(quarter="Q3 2024", yoy_revenue_growth=-0.08)
+        assert growth.yoy_revenue_growth == pytest.approx(0.15)
+        assert decline.yoy_revenue_growth == pytest.approx(-0.08)
+
+
+# ===========================================================================
+# PriceForecast — confidence boundary
+# ===========================================================================
+
+
+class TestPriceForecastConfidenceBoundary:
+    def test_confidence_zero(self) -> None:
+        """confidence=0.0 is a valid lower boundary (complete uncertainty)."""
+        forecast = PriceForecast(low=50.0, mid=55.0, high=60.0, confidence=0.0)
+        assert forecast.confidence == pytest.approx(0.0)
+
+    def test_confidence_one(self) -> None:
+        """confidence=1.0 is a valid upper boundary (full certainty)."""
+        forecast = PriceForecast(low=50.0, mid=55.0, high=60.0, confidence=1.0)
+        assert forecast.confidence == pytest.approx(1.0)
+
+
+# ===========================================================================
+# RiskAssessment — edge cases
+# ===========================================================================
+
+
+class TestRiskAssessmentEdgeCases:
+    def test_empty_risk_factors_list(self) -> None:
+        """risk_factors may be an empty list (no specific factors identified)."""
+        ra = RiskAssessment(overall_risk="low", risk_factors=[], risk_score=0.5)
+        assert ra.risk_factors == []
+        assert len(ra.risk_factors) == 0
+
+    def test_very_high_risk_with_many_factors(self) -> None:
+        """very_high risk level with a long risk_factors list is accepted."""
+        factors = [f"risk_{i}" for i in range(20)]
+        ra = RiskAssessment(overall_risk="very_high", risk_factors=factors, risk_score=9.9)
+        assert ra.overall_risk == "very_high"
+        assert len(ra.risk_factors) == 20
+
+
+# ===========================================================================
+# StockAnalysisResponse — additional edge cases
+# ===========================================================================
+
+
+class TestStockAnalysisResponseEdgeCases:
+    def test_string_defaults_are_empty_strings(self) -> None:
+        """Company info string fields default to empty string, not None."""
+        resp = StockAnalysisResponse(**_make_response())
+        assert resp.company_description == ""
+        assert resp.sector == ""
+        assert resp.industry == ""
+        assert resp.headquarters == ""
+        assert resp.ceo == ""
+        assert resp.founded == ""
+        assert resp.employees == ""
+
+    def test_research_fields_default_to_empty(self) -> None:
+        """Research enrichment fields default to empty string / empty list."""
+        resp = StockAnalysisResponse(**_make_response())
+        assert resp.research_context == ""
+        assert resp.research_sources == []
+
+    def test_all_optional_fields_populated(self) -> None:
+        """StockAnalysisResponse accepts every optional field being set."""
+        outlook_payload = {
+            "one_year": _make_forecast(),
+            "five_year": _make_forecast(mid=300.0),
+            "ten_year": _make_forecast(mid=500.0),
+            "verdict": "hold",
+            "verdict_rationale": "Steady but unexciting.",
+            "compound_annual_return": 8.0,
+        }
+        historical = [
+            {"date": "2025-01-01", "open": 150.0, "high": 155.0, "low": 148.0, "close": 153.0},
+            {"date": "2025-01-02", "open": 153.0, "high": 158.0, "low": 151.0, "close": 156.0, "volume": 50_000_000},
+        ]
+        payload = _make_response(
+            previous_close=174.0,
+            open=175.0,
+            day_high=178.0,
+            day_low=172.0,
+            volume=40_000_000,
+            market_cap="1.2T",
+            pe_ratio=22.0,
+            eps=7.0,
+            week_52_high=200.0,
+            week_52_low=140.0,
+            dividend_yield=0.012,
+            technical={"signal": "sell"},
+            company_description="A major corporation.",
+            sector="Technology",
+            industry="Software",
+            headquarters="Seattle, WA",
+            ceo="Jane Doe",
+            founded="1994",
+            employees="220,000",
+            long_term_outlook=outlook_payload,
+            historical_prices=historical,
+            research_context="Analyst consensus: cautious.",
+            research_sources=["Goldman Sachs", "Morgan Stanley"],
+            model_used="kimi-k2.5",
+        )
+        resp = StockAnalysisResponse(**payload)
+
+        assert resp.sector == "Technology"
+        assert resp.ceo == "Jane Doe"
+        assert resp.employees == "220,000"
+        assert resp.research_context == "Analyst consensus: cautious."
+        assert resp.research_sources == ["Goldman Sachs", "Morgan Stanley"]
+        assert len(resp.historical_prices) == 2
+        assert resp.historical_prices[1].volume == 50_000_000
+        assert isinstance(resp.long_term_outlook, LongTermOutlook)
+        assert resp.long_term_outlook.verdict == "hold"
+
+    def test_historical_prices_default_to_empty_list(self) -> None:
+        resp = StockAnalysisResponse(**_make_response())
+        assert resp.historical_prices == []
+
+    def test_confidence_score_boundary_zero(self) -> None:
+        """confidence_score=0.0 is stored without modification."""
+        resp = StockAnalysisResponse(**_make_response(confidence_score=0.0))
+        assert resp.confidence_score == pytest.approx(0.0)
+
+    def test_confidence_score_boundary_one(self) -> None:
+        """confidence_score=1.0 is stored without modification."""
+        resp = StockAnalysisResponse(**_make_response(confidence_score=1.0))
+        assert resp.confidence_score == pytest.approx(1.0)
+
+
+# ===========================================================================
+# LongTermOutlook — edge cases
+# ===========================================================================
+
+
+class TestLongTermOutlookEdgeCases:
+    def test_compound_annual_return_negative(self) -> None:
+        """compound_annual_return can be negative (projected loss scenario)."""
+        outlook = LongTermOutlook(**_make_outlook(compound_annual_return=-3.5))
+        assert outlook.compound_annual_return == pytest.approx(-3.5)
+
+    def test_compound_annual_return_zero(self) -> None:
+        """compound_annual_return of zero means flat returns projected."""
+        outlook = LongTermOutlook(**_make_outlook(compound_annual_return=0.0))
+        assert outlook.compound_annual_return == pytest.approx(0.0)
+
+    def test_empty_catalysts_and_risks_accepted(self) -> None:
+        """Both catalysts and long_term_risks may be empty lists simultaneously."""
+        outlook = LongTermOutlook(**_make_outlook(catalysts=[], long_term_risks=[]))
+        assert outlook.catalysts == []
+        assert outlook.long_term_risks == []
+
+    def test_verdict_rationale_stored_verbatim(self) -> None:
+        """verdict_rationale is stored as-is including punctuation and whitespace."""
+        rationale = "Strong AI tailwinds; however, valuation is stretched at 35x."
+        outlook = LongTermOutlook(**_make_outlook(verdict_rationale=rationale))
+        assert outlook.verdict_rationale == rationale

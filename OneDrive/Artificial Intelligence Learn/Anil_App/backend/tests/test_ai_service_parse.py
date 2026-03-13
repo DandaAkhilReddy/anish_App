@@ -9,6 +9,7 @@ import pytest
 from app.core.exceptions import AIAnalysisError
 from app.models.analysis import (
     HistoricalPrice,
+    LongTermOutlook,
     NewsItem,
     PriceForecast,
     PricePredictions,
@@ -977,3 +978,485 @@ class TestMergeResponseCodeAttribute:
                 "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
             )
         assert exc_info.value.code == "AI_ANALYSIS_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# TestParseLongTerm
+# ---------------------------------------------------------------------------
+
+
+def _long_term_outlook_dict(**overrides: Any) -> dict[str, Any]:
+    """Return a valid long_term_outlook dict for testing."""
+    base: dict[str, Any] = {
+        "one_year": _price_forecast_dict(170, 200, 230, 0.70),
+        "five_year": _price_forecast_dict(200, 300, 400, 0.55),
+        "ten_year": _price_forecast_dict(250, 450, 650, 0.40),
+        "verdict": "buy",
+        "verdict_rationale": "Strong long-term growth potential.",
+        "catalysts": ["AI integration", "Services expansion"],
+        "long_term_risks": ["Regulatory pressure"],
+        "compound_annual_return": 12.5,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestParseLongTerm:
+    """Tests for AIAnalysisService._parse_long_term()."""
+
+    def test_returns_long_term_outlook_on_valid_data(self) -> None:
+        result = AIAnalysisService._parse_long_term(_long_term_outlook_dict())
+        assert isinstance(result, LongTermOutlook)
+        assert result.verdict == "buy"
+        assert result.compound_annual_return == pytest.approx(12.5)
+
+    def test_returns_none_when_data_is_none(self) -> None:
+        assert AIAnalysisService._parse_long_term(None) is None
+
+    def test_returns_none_when_data_is_empty_dict(self) -> None:
+        assert AIAnalysisService._parse_long_term({}) is None
+
+    def test_returns_none_when_data_is_not_dict(self) -> None:
+        assert AIAnalysisService._parse_long_term("invalid") is None  # type: ignore[arg-type]
+
+    def test_returns_none_when_required_key_missing(self) -> None:
+        data = _long_term_outlook_dict()
+        del data["one_year"]
+        assert AIAnalysisService._parse_long_term(data) is None
+
+    def test_returns_none_when_verdict_missing(self) -> None:
+        data = _long_term_outlook_dict()
+        del data["verdict"]
+        assert AIAnalysisService._parse_long_term(data) is None
+
+    def test_catalysts_defaults_to_empty_list(self) -> None:
+        data = _long_term_outlook_dict()
+        del data["catalysts"]
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.catalysts == []
+
+    def test_long_term_risks_defaults_to_empty_list(self) -> None:
+        data = _long_term_outlook_dict()
+        del data["long_term_risks"]
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.long_term_risks == []
+
+    def test_compound_annual_return_defaults_to_zero(self) -> None:
+        data = _long_term_outlook_dict()
+        del data["compound_annual_return"]
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.compound_annual_return == pytest.approx(0.0)
+
+    def test_verdict_rationale_defaults_to_empty_string(self) -> None:
+        data = _long_term_outlook_dict()
+        del data["verdict_rationale"]
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.verdict_rationale == ""
+
+    def test_forecast_values_preserved(self) -> None:
+        result = AIAnalysisService._parse_long_term(_long_term_outlook_dict())
+        assert result is not None
+        assert result.one_year.mid == pytest.approx(200.0)
+        assert result.five_year.mid == pytest.approx(300.0)
+        assert result.ten_year.mid == pytest.approx(450.0)
+
+    def test_merge_response_includes_long_term_outlook(self) -> None:
+        """_merge_response populates long_term_outlook when ai_data includes it."""
+        service = _make_service()
+        ai_data = _minimal_valid_ai_data(
+            long_term_outlook=_long_term_outlook_dict()
+        )
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        assert result.long_term_outlook is not None
+        assert result.long_term_outlook.verdict == "buy"
+
+    def test_merge_response_long_term_none_when_absent(self) -> None:
+        """_merge_response sets long_term_outlook=None when key is absent."""
+        service = _make_service()
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), _minimal_valid_ai_data()
+        )
+        assert result.long_term_outlook is None
+
+
+# ---------------------------------------------------------------------------
+# TestMergeResponseExtraFields
+# ---------------------------------------------------------------------------
+
+
+class TestMergeResponseExtraFields:
+    """Extra or unexpected keys in ai_data are silently ignored."""
+
+    @pytest.fixture
+    def service(self) -> AIAnalysisService:
+        return _make_service()
+
+    def test_extra_top_level_keys_do_not_raise(self, service: AIAnalysisService) -> None:
+        """Unknown keys in ai_data pass through without error."""
+        ai_data = _minimal_valid_ai_data(
+            unknown_field_xyz="should be ignored",
+            another_extra={"nested": True},
+        )
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        assert isinstance(result, StockAnalysisResponse)
+
+    def test_extra_keys_do_not_pollute_response(self, service: AIAnalysisService) -> None:
+        """StockAnalysisResponse has no attribute for unknown ai_data keys."""
+        ai_data = _minimal_valid_ai_data(surprise_field="surprise")
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        assert not hasattr(result, "surprise_field")
+
+    def test_extra_keys_in_risk_assessment_do_not_raise(
+        self, service: AIAnalysisService
+    ) -> None:
+        """Pydantic ignores extra keys in nested dicts (RiskAssessment)."""
+        ai_data = _minimal_valid_ai_data(
+            risk_assessment={
+                "overall_risk": "low",
+                "risk_factors": [],
+                "risk_score": 0.1,
+                "undocumented_metric": 99,
+            }
+        )
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        assert result.risk_assessment.overall_risk == "low"
+
+
+# ---------------------------------------------------------------------------
+# TestMergeResponseEmptyStrings
+# ---------------------------------------------------------------------------
+
+
+class TestMergeResponseEmptyStrings:
+    """All AI string fields set to empty string should be stored verbatim."""
+
+    @pytest.fixture
+    def service(self) -> AIAnalysisService:
+        return _make_service()
+
+    def test_empty_string_summary_stored(self, service: AIAnalysisService) -> None:
+        result = service._merge_response(
+            "AAPL",
+            _mock_quote(),
+            [],
+            TechnicalSnapshot(),
+            _minimal_valid_ai_data(summary=""),
+        )
+        assert result.summary == ""
+
+    def test_empty_string_bull_case_stored(self, service: AIAnalysisService) -> None:
+        result = service._merge_response(
+            "AAPL",
+            _mock_quote(),
+            [],
+            TechnicalSnapshot(),
+            _minimal_valid_ai_data(bull_case=""),
+        )
+        assert result.bull_case == ""
+
+    def test_empty_string_bear_case_stored(self, service: AIAnalysisService) -> None:
+        result = service._merge_response(
+            "AAPL",
+            _mock_quote(),
+            [],
+            TechnicalSnapshot(),
+            _minimal_valid_ai_data(bear_case=""),
+        )
+        assert result.bear_case == ""
+
+    def test_empty_string_ceo_and_founded_stored(self, service: AIAnalysisService) -> None:
+        result = service._merge_response(
+            "AAPL",
+            _mock_quote(),
+            [],
+            TechnicalSnapshot(),
+            _minimal_valid_ai_data(ceo="", founded=""),
+        )
+        assert result.ceo == ""
+        assert result.founded == ""
+
+
+# ---------------------------------------------------------------------------
+# TestMergeResponseNumericStringLevels
+# ---------------------------------------------------------------------------
+
+
+class TestMergeResponseNumericStringLevels:
+    """Support/resistance levels supplied as numeric strings are cast to float."""
+
+    @pytest.fixture
+    def service(self) -> AIAnalysisService:
+        return _make_service()
+
+    def test_support_levels_as_numeric_strings_cast_to_float(
+        self, service: AIAnalysisService
+    ) -> None:
+        """float(s) is called on each level — '165.0' becomes 165.0."""
+        ai_data = _minimal_valid_ai_data(support_levels=["165.0", "160.5"])
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        assert result.technical is not None
+        assert result.technical.support_levels == pytest.approx([165.0, 160.5])
+        assert all(isinstance(v, float) for v in result.technical.support_levels)
+
+    def test_resistance_levels_as_numeric_strings_cast_to_float(
+        self, service: AIAnalysisService
+    ) -> None:
+        ai_data = _minimal_valid_ai_data(resistance_levels=["180.0", "185.75"])
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        assert result.technical is not None
+        assert result.technical.resistance_levels == pytest.approx([180.0, 185.75])
+
+    def test_non_numeric_string_support_level_raises(
+        self, service: AIAnalysisService
+    ) -> None:
+        """float('low') raises ValueError which is wrapped as AIAnalysisError."""
+        ai_data = _minimal_valid_ai_data(support_levels=["low", "medium"])
+        with pytest.raises(AIAnalysisError, match="Failed to parse AI response"):
+            service._merge_response(
+                "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+            )
+
+
+# ---------------------------------------------------------------------------
+# TestMergeResponseNewsEdgeCases
+# ---------------------------------------------------------------------------
+
+
+class TestMergeResponseNewsEdgeCases:
+    """Edge cases for news item construction."""
+
+    @pytest.fixture
+    def service(self) -> AIAnalysisService:
+        return _make_service()
+
+    def test_news_item_missing_required_title_raises(
+        self, service: AIAnalysisService
+    ) -> None:
+        """NewsItem requires 'title'; omitting it must raise AIAnalysisError."""
+        ai_data = _minimal_valid_ai_data(
+            news=[{"source": "Reuters", "sentiment": "positive"}]
+        )
+        with pytest.raises(AIAnalysisError, match="Failed to parse AI response"):
+            service._merge_response(
+                "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+            )
+
+    def test_news_item_with_all_optional_fields_absent(
+        self, service: AIAnalysisService
+    ) -> None:
+        """Only 'title' is required; source and sentiment default to None."""
+        ai_data = _minimal_valid_ai_data(news=[{"title": "Breaking news"}])
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        item = result.news[0]
+        assert item.title == "Breaking news"
+        assert item.source is None
+        assert item.sentiment is None
+
+    def test_ten_news_items_all_parsed(self, service: AIAnalysisService) -> None:
+        """Upper bound from the prompt schema — 10 items — all parse correctly."""
+        items = [
+            {"title": f"Story {i}", "source": "AP", "sentiment": "neutral"}
+            for i in range(10)
+        ]
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), _minimal_valid_ai_data(news=items)
+        )
+        assert len(result.news) == 10
+
+
+# ---------------------------------------------------------------------------
+# TestMergeResponseMalformedQuarterlyEarnings
+# ---------------------------------------------------------------------------
+
+
+class TestMergeResponseMalformedQuarterlyEarnings:
+    """Quarterly earnings entries with bad types or missing required fields."""
+
+    @pytest.fixture
+    def service(self) -> AIAnalysisService:
+        return _make_service()
+
+    def test_earnings_entry_missing_required_quarter_raises(
+        self, service: AIAnalysisService
+    ) -> None:
+        """QuarterlyEarning requires 'quarter'; missing it must raise AIAnalysisError."""
+        ai_data = _minimal_valid_ai_data(
+            quarterly_earnings=[{"revenue": 90_000.0, "eps": 1.5}]
+        )
+        with pytest.raises(AIAnalysisError, match="Failed to parse AI response"):
+            service._merge_response(
+                "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+            )
+
+    def test_earnings_entry_with_dict_value_for_revenue_raises(
+        self, service: AIAnalysisService
+    ) -> None:
+        """A dict where a float is expected should raise AIAnalysisError."""
+        ai_data = _minimal_valid_ai_data(
+            quarterly_earnings=[
+                {
+                    "quarter": "Q1 2025",
+                    "revenue": {"amount": 90_000, "currency": "USD"},
+                }
+            ]
+        )
+        with pytest.raises(AIAnalysisError, match="Failed to parse AI response"):
+            service._merge_response(
+                "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+            )
+
+    def test_earnings_entry_with_null_numeric_fields_accepted(
+        self, service: AIAnalysisService
+    ) -> None:
+        """All numeric earnings fields are Optional — explicit null is valid."""
+        ai_data = _minimal_valid_ai_data(
+            quarterly_earnings=[
+                {
+                    "quarter": "Q1 2025",
+                    "revenue": None,
+                    "net_income": None,
+                    "eps": None,
+                    "yoy_revenue_growth": None,
+                }
+            ]
+        )
+        result = service._merge_response(
+            "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+        )
+        q = result.quarterly_earnings[0]
+        assert q.quarter == "Q1 2025"
+        assert q.revenue is None
+        assert q.eps is None
+
+
+# ---------------------------------------------------------------------------
+# TestMergeResponseNullRecommendation
+# ---------------------------------------------------------------------------
+
+
+class TestMergeResponseNullRecommendation:
+    """recommendation=None must fail cleanly, not cause an AttributeError."""
+
+    @pytest.fixture
+    def service(self) -> AIAnalysisService:
+        return _make_service()
+
+    def test_null_recommendation_raises_ai_analysis_error(
+        self, service: AIAnalysisService
+    ) -> None:
+        """None is not a valid Literal for recommendation — Pydantic rejects it."""
+        ai_data = _minimal_valid_ai_data(recommendation=None)
+        with pytest.raises(AIAnalysisError, match="Failed to parse AI response"):
+            service._merge_response(
+                "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+            )
+
+    def test_invalid_recommendation_string_raises(
+        self, service: AIAnalysisService
+    ) -> None:
+        """'strong_hold' is not in the Literal enum — must raise AIAnalysisError."""
+        ai_data = _minimal_valid_ai_data(recommendation="strong_hold")
+        with pytest.raises(AIAnalysisError, match="Failed to parse AI response"):
+            service._merge_response(
+                "AAPL", _mock_quote(), [], TechnicalSnapshot(), ai_data
+            )
+
+
+# ---------------------------------------------------------------------------
+# TestParseLongTermEdgeCases
+# ---------------------------------------------------------------------------
+
+
+class TestParseLongTermEdgeCases:
+    """Extended edge cases for _parse_long_term."""
+
+    def test_all_optional_fields_absent_returns_outlook(self) -> None:
+        """With only the required keys present, all optional fields use their defaults."""
+        data = {
+            "one_year": _price_forecast_dict(170, 200, 230, 0.70),
+            "five_year": _price_forecast_dict(200, 300, 400, 0.55),
+            "ten_year": _price_forecast_dict(250, 450, 650, 0.40),
+            "verdict": "hold",
+            "compound_annual_return": 8.0,
+        }
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.verdict == "hold"
+        assert result.catalysts == []
+        assert result.long_term_risks == []
+        assert result.verdict_rationale == ""
+
+    def test_catalysts_as_string_returns_none(self) -> None:
+        """catalysts must be a list; a bare string causes a parse failure → None returned."""
+        data = _long_term_outlook_dict(catalysts="AI growth will drive expansion")
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is None
+
+    def test_long_term_risks_as_empty_list_returns_outlook(self) -> None:
+        """An empty long_term_risks list is valid and stored as-is."""
+        data = _long_term_outlook_dict(long_term_risks=[])
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.long_term_risks == []
+
+    def test_target_prices_as_numeric_strings_coerced_by_pydantic(self) -> None:
+        """Pydantic coerces numeric strings to float for PriceForecast fields."""
+        data = _long_term_outlook_dict(
+            one_year={"low": "170.0", "mid": "200.0", "high": "230.0", "confidence": "0.70"}
+        )
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert result.one_year.low == pytest.approx(170.0)
+        assert result.one_year.mid == pytest.approx(200.0)
+
+    def test_investment_horizon_as_null_is_ignored(self) -> None:
+        """investment_horizon is not a known field — extra keys are ignored by Pydantic."""
+        data = _long_term_outlook_dict(investment_horizon=None)
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+
+    def test_compound_annual_return_as_null_returns_none(self) -> None:
+        """float(None) raises TypeError, so null compound_annual_return → None returned."""
+        data = _long_term_outlook_dict(compound_annual_return=None)
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is None
+
+    def test_compound_annual_return_as_integer_is_coerced(self) -> None:
+        """Integer compound_annual_return is cast to float without error."""
+        data = _long_term_outlook_dict(compound_annual_return=10)
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is not None
+        assert isinstance(result.compound_annual_return, float)
+        assert result.compound_annual_return == pytest.approx(10.0)
+
+    def test_price_forecast_non_numeric_string_returns_none(self) -> None:
+        """Non-numeric string for a PriceForecast field is a parse error → None."""
+        data = _long_term_outlook_dict(
+            five_year={"low": "low_end", "mid": "middle", "high": "high_end", "confidence": "moderate"}
+        )
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is None
+
+    def test_verdict_with_invalid_literal_returns_none(self) -> None:
+        """A verdict value outside the Literal enum causes Pydantic validation to fail → None."""
+        data = _long_term_outlook_dict(verdict="maybe")
+        result = AIAnalysisService._parse_long_term(data)
+        assert result is None

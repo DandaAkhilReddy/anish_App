@@ -54,9 +54,9 @@ class TestRequiredFields:
 
 
 class TestDefaults:
-    def test_default_deployment_is_kimi(self) -> None:
+    def test_default_deployment_is_gpt41(self) -> None:
         s = make_settings()
-        assert s.azure_openai_deployment == "Kimi-K2.5"
+        assert s.azure_openai_deployment == "gpt-4.1"
 
     def test_default_api_version(self) -> None:
         s = make_settings()

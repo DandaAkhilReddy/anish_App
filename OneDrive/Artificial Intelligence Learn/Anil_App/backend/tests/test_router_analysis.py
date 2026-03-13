@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 
-from app.core.exceptions import AIAnalysisError, StockNotFoundError
+from app.core.exceptions import AIAnalysisError, ExternalAPIError, StockNotFoundError
 from app.models.analysis import (
     PriceForecast,
     PricePredictions,
@@ -326,3 +326,119 @@ class TestAnalyzeStockNotFoundError:
             response = await client.post("/api/analyze/FAKE")
 
         assert "application/json" in response.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# ExternalAPIError → 502
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeStockExternalAPIError:
+    """When the AI service raises ExternalAPIError the router must return 502."""
+
+    @pytest.mark.asyncio
+    async def test_returns_502_on_external_api_error(self, client: AsyncClient) -> None:
+        """HTTP status must be 502 when analyze() raises ExternalAPIError."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.side_effect = ExternalAPIError("Yahoo Finance", "connection timeout")
+            response = await client.post("/api/analyze/AAPL")
+
+        assert response.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_502_error_body_has_error_key(self, client: AsyncClient) -> None:
+        """502 response body must contain a top-level 'error' object."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.side_effect = ExternalAPIError("FMP", "503 upstream")
+            response = await client.post("/api/analyze/TSLA")
+
+        assert "error" in response.json()
+
+    @pytest.mark.asyncio
+    async def test_502_error_body_contains_code(self, client: AsyncClient) -> None:
+        """502 error JSON body must include the EXTERNAL_API_ERROR code."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.side_effect = ExternalAPIError("Yahoo Finance", "rate limited")
+            response = await client.post("/api/analyze/AAPL")
+
+        assert response.json()["error"]["code"] == "EXTERNAL_API_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_502_response_is_json(self, client: AsyncClient) -> None:
+        """502 response must have JSON content-type."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.side_effect = ExternalAPIError("FMP", "unreachable")
+            response = await client.post("/api/analyze/NVDA")
+
+        assert "application/json" in response.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# URL-encoded and special-character tickers
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeStockSpecialTickers:
+    """Verifies routing behaviour for non-standard ticker path segments."""
+
+    @pytest.mark.asyncio
+    async def test_url_encoded_space_decoded_before_service(
+        self, client: AsyncClient
+    ) -> None:
+        """A ticker path segment with a URL-encoded space is decoded by FastAPI
+        and forwarded to the service as the decoded string."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.return_value = _MOCK_RESPONSE
+            # %20 is a URL-encoded space; FastAPI path decodes it automatically
+            await client.post("/api/analyze/BRK%20B")
+
+        called_with = mock_analyze.call_args[0][0]
+        assert " " in called_with or called_with == "BRK B"
+
+    @pytest.mark.asyncio
+    async def test_hyphenated_ticker_forwarded_verbatim(
+        self, client: AsyncClient
+    ) -> None:
+        """Tickers containing a hyphen (e.g. BRK-B) are forwarded without mutation."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.return_value = _MOCK_RESPONSE
+            await client.post("/api/analyze/BRK-B")
+
+        mock_analyze.assert_called_once_with("BRK-B")
+
+    @pytest.mark.asyncio
+    async def test_lowercase_ticker_forwarded_as_is(
+        self, client: AsyncClient
+    ) -> None:
+        """The router does NOT normalise case — lowercase ticker reaches the service unchanged."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.return_value = _MOCK_RESPONSE
+            await client.post("/api/analyze/aapl")
+
+        mock_analyze.assert_called_once_with("aapl")
+
+    @pytest.mark.asyncio
+    async def test_response_contains_all_required_top_level_fields(
+        self, client: AsyncClient
+    ) -> None:
+        """A successful response must include every mandatory top-level field."""
+        with patch(_PATCH_TARGET, new_callable=AsyncMock) as mock_analyze:
+            mock_analyze.return_value = _MOCK_RESPONSE
+            response = await client.post("/api/analyze/AAPL")
+
+        body = response.json()
+        required_fields = [
+            "ticker",
+            "company_name",
+            "current_price",
+            "recommendation",
+            "confidence_score",
+            "summary",
+            "bull_case",
+            "bear_case",
+            "risk_assessment",
+            "price_predictions",
+            "analysis_timestamp",
+        ]
+        for field in required_fields:
+            assert field in body, f"Missing required field: {field}"
