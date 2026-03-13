@@ -45,8 +45,7 @@ vi.mock('framer-motion', () => {
 // Mock lightweight-charts so PriceChart renders without a real DOM canvas
 vi.mock('lightweight-charts', () => ({
   createChart: () => ({
-    addCandlestickSeries: () => ({ setData: vi.fn() }),
-    addHistogramSeries: () => ({ setData: vi.fn() }),
+    addSeries: () => ({ setData: vi.fn() }),
     priceScale: () => ({ applyOptions: vi.fn() }),
     timeScale: () => ({ fitContent: vi.fn(), borderColor: '' }),
     applyOptions: vi.fn(),
@@ -54,7 +53,16 @@ vi.mock('lightweight-charts', () => ({
   }),
   ColorType: { Solid: 'solid' },
   CrosshairMode: { Normal: 1 },
+  CandlestickSeries: 'CandlestickSeries',
+  HistogramSeries: 'HistogramSeries',
 }));
+
+// Stub ResizeObserver for chart tests (jsdom doesn't provide it)
+vi.stubGlobal('ResizeObserver', class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+});
 
 const mockFetchAnalysis = vi.fn();
 const mockSetActiveTab = vi.fn();
@@ -163,6 +171,12 @@ function setupStore(overrides: Partial<StoreSlice> = {}): void {
 
   // Imperative getState used by the Retry button
   (useStockStore as unknown as { getState: () => StoreSlice }).getState = () => store;
+
+  // Persist middleware API used by hydration guard
+  (useStockStore as unknown as Record<string, unknown>).persist = {
+    hasHydrated: () => true,
+    onFinishHydration: () => () => {},
+  };
 }
 
 // ===========================================================================
@@ -305,6 +319,38 @@ describe('StockAnalysis', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 4b. Chart with historical price data — time range buttons
+  // -------------------------------------------------------------------------
+
+  describe('chart time range buttons', () => {
+    const priceData = [
+      { date: '2020-01-02', open: 74, high: 75, low: 73, close: 74.5, volume: 1000 },
+      { date: '2023-06-15', open: 180, high: 182, low: 179, close: 181, volume: 2000 },
+      { date: '2025-03-10', open: 185, high: 186, low: 184, close: 185.5, volume: 3000 },
+    ];
+
+    beforeEach(() =>
+      setupStore({
+        currentTicker: 'AAPL',
+        analysis: { ...mockAnalysis, historical_prices: priceData },
+        activeTab: 'chart',
+      }),
+    );
+
+    it('renders all 7 time range buttons including 1Y, 5Y, ALL', () => {
+      render(<StockAnalysis />);
+      for (const label of ['1W', '1M', '3M', '6M', '1Y', '5Y', 'ALL']) {
+        expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+      }
+    });
+
+    it('renders Price Chart heading when data is available', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Price Chart')).toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 5. Analysis available — news tab
   // -------------------------------------------------------------------------
 
@@ -413,6 +459,216 @@ describe('StockAnalysis', () => {
       setupStore({ currentTicker: 'AAPL', analysis: null, isLoading: false, error: null });
       const { container } = render(<StockAnalysis />);
       expect(container.firstChild).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 9. Analysis available — invest tab with long_term_outlook present
+  // -------------------------------------------------------------------------
+
+  const mockOutlook = {
+    one_year: { low: 190, mid: 210, high: 230, confidence: 0.72 },
+    five_year: { low: 240, mid: 290, high: 350, confidence: 0.6 },
+    ten_year: { low: 300, mid: 400, high: 520, confidence: 0.45 },
+    verdict: 'buy' as const,
+    verdict_rationale: 'Strong fundamentals support long-term appreciation.',
+    catalysts: ['AI integration', 'Services growth'],
+    long_term_risks: ['Regulatory headwinds'],
+    compound_annual_return: 12.5,
+  };
+
+  const mockAnalysisWithOutlook: StockAnalysisResponse = {
+    ...mockAnalysis,
+    long_term_outlook: mockOutlook,
+  };
+
+  describe('analysis loaded — invest tab (with outlook)', () => {
+    beforeEach(() =>
+      setupStore({
+        currentTicker: 'AAPL',
+        analysis: mockAnalysisWithOutlook,
+        activeTab: 'invest',
+      }),
+    );
+
+    it('renders the verdict banner with BUY FOR LONG TERM', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('BUY FOR LONG TERM')).toBeInTheDocument();
+    });
+
+    it('renders the verdict_rationale text', () => {
+      render(<StockAnalysis />);
+      expect(
+        screen.getByText('Strong fundamentals support long-term appreciation.'),
+      ).toBeInTheDocument();
+    });
+
+    it('renders the Price Trajectory section heading', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Price Trajectory')).toBeInTheDocument();
+    });
+
+    it('renders all three time horizon labels', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('1 Year')).toBeInTheDocument();
+      expect(screen.getByText('5 Years')).toBeInTheDocument();
+      expect(screen.getByText('10 Years')).toBeInTheDocument();
+    });
+
+    it('renders Growth Catalysts section', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Growth Catalysts')).toBeInTheDocument();
+    });
+
+    it('renders catalyst items from outlook data', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('AI integration')).toBeInTheDocument();
+      expect(screen.getByText('Services growth')).toBeInTheDocument();
+    });
+
+    it('renders Long-Term Risks section', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Long-Term Risks')).toBeInTheDocument();
+    });
+
+    it('renders risk items from outlook data', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Regulatory headwinds')).toBeInTheDocument();
+    });
+
+    it('renders the CAGR estimate', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText(/12\.5%\s*CAGR/)).toBeInTheDocument();
+    });
+
+    it('renders the bottom-line ticker summary', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText(/for long-term investors/i)).toBeInTheDocument();
+    });
+
+    it('does not render the "not available" fallback message', () => {
+      render(<StockAnalysis />);
+      expect(
+        screen.queryByText('Long-term outlook data not available for this stock.'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('does not render NewsFeed on the invest tab', () => {
+      render(<StockAnalysis />);
+      expect(screen.queryByText('Latest News')).not.toBeInTheDocument();
+    });
+
+    it('does not render QuarterlyEarnings on the invest tab', () => {
+      render(<StockAnalysis />);
+      expect(screen.queryByText('Quarterly Earnings')).not.toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 10. Analysis available — invest tab without long_term_outlook
+  // -------------------------------------------------------------------------
+
+  describe('analysis loaded — invest tab (no outlook)', () => {
+    beforeEach(() =>
+      setupStore({
+        currentTicker: 'AAPL',
+        analysis: { ...mockAnalysis, long_term_outlook: null },
+        activeTab: 'invest',
+      }),
+    );
+
+    it('renders the "not available" fallback message', () => {
+      render(<StockAnalysis />);
+      expect(
+        screen.getByText('Long-term outlook data not available for this stock.'),
+      ).toBeInTheDocument();
+    });
+
+    it('does not render the verdict banner', () => {
+      render(<StockAnalysis />);
+      expect(screen.queryByText(/FOR LONG TERM/)).not.toBeInTheDocument();
+    });
+
+    it('does not render Price Trajectory', () => {
+      render(<StockAnalysis />);
+      expect(screen.queryByText('Price Trajectory')).not.toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 11. Loading state — timer messages
+  // -------------------------------------------------------------------------
+
+  describe('loading state — timer messages', () => {
+    beforeEach(() =>
+      setupStore({ currentTicker: 'TSLA', isLoading: true }),
+    );
+
+    it('renders the ticker name in the "Analyzing…" line', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText(/Analyzing TSLA/)).toBeInTheDocument();
+    });
+
+    it('shows the initial agent message at second 0', () => {
+      render(<StockAnalysis />);
+      // loadingSeconds starts at 0 → messageIndex 0 → first message
+      expect(
+        screen.getByText('Your AI agent is analyzing market data...'),
+      ).toBeInTheDocument();
+    });
+
+    it('does not render analysis content while loading', () => {
+      render(<StockAnalysis />);
+      expect(screen.queryByText('Price Trajectory')).not.toBeInTheDocument();
+      expect(screen.queryByText('Latest News')).not.toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 12. Analysis available — about tab (CompanyAbout component coverage)
+  // -------------------------------------------------------------------------
+
+  describe('analysis loaded — about tab (CompanyAbout deep coverage)', () => {
+    beforeEach(() =>
+      setupStore({ currentTicker: 'AAPL', analysis: mockAnalysis, activeTab: 'about' }),
+    );
+
+    it('renders the "About Apple Inc." heading from CompanyAbout', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('About Apple Inc.')).toBeInTheDocument();
+    });
+
+    it('renders the Company Info section', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Company Info')).toBeInTheDocument();
+    });
+
+    it('renders the Key Statistics section', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Key Statistics')).toBeInTheDocument();
+    });
+
+    it('renders the CEO value from analysis fixture', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Tim Cook')).toBeInTheDocument();
+    });
+
+    it('renders the headquarters value', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Cupertino, CA')).toBeInTheDocument();
+    });
+
+    it('renders the disclaimer text', () => {
+      render(<StockAnalysis />);
+      expect(screen.getByText('Not financial advice.')).toBeInTheDocument();
+    });
+
+    it('does not render invest-tab content on the about tab', () => {
+      render(<StockAnalysis />);
+      expect(screen.queryByText(/FOR LONG TERM/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('Long-term outlook data not available for this stock.'),
+      ).not.toBeInTheDocument();
     });
   });
 });
