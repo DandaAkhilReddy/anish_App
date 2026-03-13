@@ -70,6 +70,19 @@ class RiskAssessment(BaseModel):
     risk_score: float
 
 
+class LongTermOutlook(BaseModel):
+    """Long-term investment outlook with multi-year projections."""
+
+    one_year: PriceForecast
+    five_year: PriceForecast
+    ten_year: PriceForecast
+    verdict: Literal["strong_buy", "buy", "hold", "sell", "strong_sell"]
+    verdict_rationale: str
+    catalysts: list[str] = []
+    long_term_risks: list[str] = []
+    compound_annual_return: float
+
+
 class HistoricalPrice(BaseModel):
     """Single day OHLC price point for charting."""
 
@@ -125,10 +138,14 @@ class StockAnalysisResponse(BaseModel):
     bear_case: str
     risk_assessment: RiskAssessment
     price_predictions: PricePredictions
+    long_term_outlook: LongTermOutlook | None = None
+    # Research enrichment
+    research_context: str = ""
+    research_sources: list[str] = []
     # Metadata
     analysis_timestamp: datetime
-    model_used: str = "kimi-k2.5"
+    model_used: str = "gpt-5.3"
     disclaimer: str = (
-        "Price data sourced from Yahoo Finance. "
+        "Price data sourced from Financial Modeling Prep. "
         "Analysis and predictions are AI-generated — not financial advice."
     )

@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from app.core.exceptions import AIAnalysisError
+from app.core.exceptions import AIAnalysisError, ExternalAPIError, StockNotFoundError
 from app.core.logging import get_logger
 from app.models.analysis import (
     HistoricalPrice,
+    LongTermOutlook,
     NewsItem,
     PriceForecast,
     PricePredictions,
@@ -17,6 +18,7 @@ from app.models.analysis import (
     TechnicalSnapshot,
 )
 from app.providers.openai_provider import OpenAIProvider
+from app.providers.sharepoint_agent import SharePointAgentProvider
 from app.services.market_data_service import MarketDataService
 
 logger = get_logger(__name__)
@@ -30,14 +32,14 @@ _SYSTEM_PROMPT = (
     "the correct official ticker symbol (e.g., 'microsft' → 'MSFT', "
     "'apple' → 'AAPL', 'google' → 'GOOGL').\n\n"
     "Do NOT invent or override any price data — it is provided to you "
-    "from Yahoo Finance.\n\n"
+    "from real market data.\n\n"
     "Respond in valid JSON matching the exact schema provided. "
     "No markdown, no code blocks, just raw JSON."
 )
 
 _USER_PROMPT_TEMPLATE = """Analyze the stock: {ticker} ({company_name})
 
-=== REAL MARKET DATA (from Yahoo Finance — do NOT override) ===
+=== REAL MARKET DATA (do NOT override) ===
 Current Price: ${current_price}
 Previous Close: ${previous_close}
 Day Range: ${day_low} – ${day_high}
@@ -51,6 +53,7 @@ Technical Indicators (computed from real data):
   RSI-14: {rsi_14}
   MACD: {macd_line} | Signal: {macd_signal}
 
+{research_section}
 Based on the above real data, provide your qualitative analysis as JSON:
 {{
   "recommendation": "strong_buy" | "buy" | "hold" | "sell" | "strong_sell",
@@ -76,6 +79,16 @@ Based on the above real data, provide your qualitative analysis as JSON:
     {{"quarter": "<e.g. Q1 2025>", "revenue": <float in millions USD or null>, "net_income": <float in millions USD or null>, "eps": <float or null>, "yoy_revenue_growth": <float as decimal like 0.12 for 12% or null>}},
     ... (last 4 reported quarters, most recent first)
   ],
+  "long_term_outlook": {{
+    "one_year": {{"low": <float>, "mid": <float>, "high": <float>, "confidence": <float 0-1>}},
+    "five_year": {{"low": <float>, "mid": <float>, "high": <float>, "confidence": <float 0-1>}},
+    "ten_year": {{"low": <float>, "mid": <float>, "high": <float>, "confidence": <float 0-1>}},
+    "verdict": "strong_buy" | "buy" | "hold" | "sell" | "strong_sell",
+    "verdict_rationale": "<2-3 sentences: why this stock is or isn't a good long-term hold>",
+    "catalysts": ["<growth driver 1>", "<growth driver 2>", ...up to 5],
+    "long_term_risks": ["<risk 1>", "<risk 2>", ...up to 5],
+    "compound_annual_return": <estimated CAGR as percent e.g. 12.5>
+  }},
   "support_levels": [<float>, ...],
   "resistance_levels": [<float>, ...],
   "signal": "strong_buy" | "buy" | "neutral" | "sell" | "strong_sell",
@@ -91,15 +104,18 @@ class AIAnalysisService:
         self,
         provider: OpenAIProvider | None = None,
         market_data: MarketDataService | None = None,
+        sharepoint: SharePointAgentProvider | None = None,
     ) -> None:
-        """Initialise with an OpenAI provider and market data service.
+        """Initialise with an OpenAI provider, market data, and research agent.
 
         Args:
             provider: An ``OpenAIProvider`` instance.
             market_data: A ``MarketDataService`` for real prices.
+            sharepoint: Optional ``SharePointAgentProvider`` for research.
         """
         self._provider = provider or OpenAIProvider()
         self._market = market_data or MarketDataService()
+        self._sharepoint = sharepoint
 
     async def analyze(self, ticker: str) -> StockAnalysisResponse:
         """Run two-phase analysis: real data fetch + AI qualitative.
@@ -116,6 +132,9 @@ class AIAnalysisService:
         ticker = ticker.upper().strip()
         logger.info("analysis_starting", ticker=ticker)
 
+        # Phase 0: Resolve company name → ticker symbol
+        ticker = await self._market.resolve_ticker(ticker)
+
         # Phase 1: Fetch real market data (quote + history + technicals)
         try:
             quote, history, technicals = await asyncio.gather(
@@ -123,6 +142,21 @@ class AIAnalysisService:
                 self._market.get_historical(ticker, period="6mo"),
                 self._market.get_technicals(ticker, period="1y"),
             )
+        except (StockNotFoundError, ExternalAPIError):
+            # Fast-path ticker guess failed — fall back to search
+            ticker = await self._market.search_ticker(ticker)
+            try:
+                quote, history, technicals = await asyncio.gather(
+                    self._market.get_quote(ticker),
+                    self._market.get_historical(ticker, period="6mo"),
+                    self._market.get_technicals(ticker, period="1y"),
+                )
+            except (StockNotFoundError, ExternalAPIError):
+                raise
+            except Exception as exc:
+                raise AIAnalysisError(
+                    f"Failed to fetch market data for {ticker}: {exc}"
+                ) from exc
         except Exception as exc:
             logger.error(
                 "market_data_fetch_failed",
@@ -133,10 +167,35 @@ class AIAnalysisService:
                 f"Failed to fetch market data for {ticker}: {exc}"
             ) from exc
 
-        # Use resolved ticker from yfinance
+        # Use resolved ticker from FMP
         resolved_ticker = quote.get("ticker", ticker)
 
+        # Phase 1.5: Research enrichment (non-blocking)
+        research_context = ""
+        research_sources: list[str] = []
+        if self._sharepoint:
+            try:
+                research_context, research_sources = (
+                    await self._sharepoint.research_company(
+                        resolved_ticker,
+                        quote.get("company_name", resolved_ticker),
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "sharepoint_research_failed",
+                    ticker=resolved_ticker,
+                    error=str(exc),
+                )
+
         # Phase 2: AI qualitative analysis with real data context
+        research_section = ""
+        if research_context:
+            research_section = (
+                "\n=== RESEARCH CONTEXT (from web search) ===\n"
+                f"{research_context}\n"
+            )
+
         user_prompt = _USER_PROMPT_TEMPLATE.format(
             ticker=resolved_ticker,
             company_name=quote.get("company_name", resolved_ticker),
@@ -156,6 +215,7 @@ class AIAnalysisService:
             rsi_14=technicals.rsi_14 or "N/A",
             macd_line=technicals.macd_line or "N/A",
             macd_signal=technicals.macd_signal or "N/A",
+            research_section=research_section,
         )
 
         try:
@@ -174,7 +234,9 @@ class AIAnalysisService:
 
         # Phase 3: Merge real data + AI qualitative
         response = self._merge_response(
-            resolved_ticker, quote, history, technicals, ai_result
+            resolved_ticker, quote, history, technicals, ai_result,
+            research_context=research_context,
+            research_sources=research_sources,
         )
         logger.info(
             "analysis_complete",
@@ -190,15 +252,19 @@ class AIAnalysisService:
         history: list[HistoricalPrice],
         technicals: TechnicalSnapshot,
         ai_data: dict,
+        research_context: str = "",
+        research_sources: list[str] | None = None,
     ) -> StockAnalysisResponse:
         """Merge real market data with AI qualitative analysis.
 
         Args:
             ticker: Resolved ticker symbol.
-            quote: Real quote data from yfinance.
+            quote: Real quote data from FMP.
             history: Real historical OHLC data.
             technicals: Computed technical indicators.
             ai_data: Qualitative analysis from AI.
+            research_context: Research text from SharePoint agent.
+            research_sources: URLs consulted by the research agent.
 
         Returns:
             Fully populated ``StockAnalysisResponse``.
@@ -294,6 +360,11 @@ class AIAnalysisService:
                         **predictions_data["three_months"]
                     ),
                 ),
+                long_term_outlook=self._parse_long_term(
+                    ai_data.get("long_term_outlook")
+                ),
+                research_context=research_context,
+                research_sources=research_sources or [],
                 analysis_timestamp=datetime.now(timezone.utc),
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -306,3 +377,29 @@ class AIAnalysisService:
             raise AIAnalysisError(
                 f"Failed to parse AI response: {exc}"
             ) from exc
+
+    @staticmethod
+    def _parse_long_term(
+        data: dict | None,
+    ) -> LongTermOutlook | None:
+        """Parse long-term outlook from AI response, returning None on failure."""
+        if not data or not isinstance(data, dict):
+            return None
+        try:
+            return LongTermOutlook(
+                one_year=PriceForecast(**data["one_year"]),
+                five_year=PriceForecast(**data["five_year"]),
+                ten_year=PriceForecast(**data["ten_year"]),
+                verdict=data["verdict"],
+                verdict_rationale=data.get("verdict_rationale", ""),
+                catalysts=data.get("catalysts", []),
+                long_term_risks=data.get("long_term_risks", []),
+                compound_annual_return=float(
+                    data.get("compound_annual_return", 0)
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "long_term_outlook_parse_failed", error=str(exc)
+            )
+            return None

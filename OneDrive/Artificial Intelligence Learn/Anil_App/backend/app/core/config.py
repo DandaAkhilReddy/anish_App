@@ -14,8 +14,14 @@ class Settings(BaseSettings):
     # Azure OpenAI
     azure_openai_endpoint: str
     azure_openai_api_key: str
-    azure_openai_deployment: str = "Kimi-K2.5"
+    azure_openai_deployment: str = "gpt-4.1"
     azure_openai_api_version: str = "2024-05-01-preview"
+
+    # Financial Modeling Prep
+    fmp_api_key: str = ""
+
+    # Azure AI Foundry SharePoint Agent
+    sharepoint_agent_endpoint: str = ""
 
     # App
     environment: str = "development"
